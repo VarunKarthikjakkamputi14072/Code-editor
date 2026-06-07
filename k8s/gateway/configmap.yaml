@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: kuberag
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-0.kafka.kuberag.svc.cluster.local:9092"
+  REDIS_URL: "redis://redis:6379/0"
+  DEBUG: "false"

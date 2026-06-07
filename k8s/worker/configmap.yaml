@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: worker-config
+  namespace: kuberag
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-0.kafka.kuberag.svc.cluster.local:9092"
+  REDIS_URL: "redis://redis:6379/0"
+  POSTGRES_DSN: "postgresql://kuberag:kuberag@postgres-0.postgres.kuberag.svc.cluster.local:5432/kuberag"
+  OLLAMA_BASE_URL: "http://ollama:11434"
+  EMBED_MODEL: "nomic-embed-text"
+  GEN_MODEL: "llama3"

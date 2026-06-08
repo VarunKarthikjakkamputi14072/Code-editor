@@ -41,7 +41,7 @@ async def handle_query(message: dict) -> dict:
         raise
 
 
-async def handle_ingest(message: dict) -> None:
+async def handle_ingest(message: dict) -> dict:
     job_id = message["job_id"]
     text = message["text"]
     metadata = message.get("metadata", {})
@@ -60,6 +60,11 @@ async def handle_ingest(message: dict) -> None:
 
         await upsert_job(pool, job_id, status="completed")
         log.info("ingest_completed", job_id=job_id, chunks=len(chunks))
+
+        # Return a status dict (no answer) so the consumer mirrors completion to
+        # Redis, making ingest jobs pollable via GET /query/{job_id}. The absence
+        # of an "answer" key keeps it out of the semantic cache.
+        return {"job_id": job_id, "status": "completed", "chunks": len(chunks)}
 
     except Exception as exc:
         log.error("ingest_failed", job_id=job_id, error=str(exc))

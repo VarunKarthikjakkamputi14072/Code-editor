@@ -76,6 +76,24 @@ curl -s http://localhost:8000/api/v1/query/$JOB \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
+## Demo on a Real Dataset (SQuAD)
+
+Beyond the toy example above, [`demo/`](demo/) runs KubeRAG end-to-end against a
+real benchmark — the **Stanford Question Answering Dataset (SQuAD v1.1)** — and
+reports answer accuracy and latency. It treats SQuAD's Wikipedia passages as the
+corpus and its human-written questions + gold answers as the evaluation set.
+
+```bash
+python demo/prepare_dataset.py --passages 50 --questions 40   # fetch real data
+python demo/seed.py        # ingest the corpus (chunk → embed → pgvector)
+python demo/evaluate.py    # score answers vs. ground truth, report p50/p95 latency
+python demo/load_test.py --concurrency 200   # show Kafka backpressure under a burst
+```
+
+All demo scripts are pure Python stdlib (no `pip install`). See
+[`demo/README.md`](demo/README.md) for the full walkthrough, use-case framing, and
+expected output.
+
 ## Kubernetes Deployment
 
 ### Prerequisites

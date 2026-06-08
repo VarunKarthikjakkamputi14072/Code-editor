@@ -6,17 +6,10 @@ as separate services, with Kafka sitting in the middle so the slow parts can't t
 down the fast parts. It runs on Kubernetes and scales the heavy workers up and down
 on their own.
 
-## Why I built this
-
-Back in my undergrad I built a small "PDF chatter" — upload a paper, ask it
-questions, get answers. It worked fine for me and a few classmates. But it was a
-single process: one slow request and everyone waited, and if it crashed mid-answer
-the request was just gone.
-
-That bugged me. So KubeRAG is me answering the follow-up question I never got to at
-the time: *what does it actually take to run RAG for a lot of people at once?* The
-answer turned out to be mostly about decoupling and backpressure, not about the AI
-itself — which is the whole point of the project.
+The hard problem in RAG at scale isn't the AI — it's that LLM generation is slow and
+memory-hungry, so a burst of traffic can knock the whole thing over. KubeRAG's answer
+is decoupling and backpressure: queue the expensive work, drain it at a sustainable
+rate, and scale the workers to match demand.
 
 ## How it works
 

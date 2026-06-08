@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import signal
 
@@ -14,15 +15,29 @@ from app.rag_pipeline import handle_ingest, handle_query
 log = structlog.get_logger()
 _shutdown = asyncio.Event()
 
+# Idempotency lock TTL: long enough to cover the worst-case generation time.
+_LOCK_TTL_SECONDS = 3600
+
 
 def _handle_signal(sig, frame):
     log.info("shutdown_signal_received", signal=sig)
     _shutdown.set()
 
 
-async def _update_redis_status(job_id: str, result: dict) -> None:
+async def _get_redis() -> aioredis.Redis:
+    return aioredis.from_url(settings.redis_url, decode_responses=True)
+
+
+async def _acquire_lock(redis: aioredis.Redis, job_id: str) -> bool:
+    """SETNX-based idempotency lock. Returns True if this worker owns the job."""
+    acquired = await redis.setnx(f"kuberag:lock:{job_id}", "1")
+    if acquired:
+        await redis.expire(f"kuberag:lock:{job_id}", _LOCK_TTL_SECONDS)
+    return bool(acquired)
+
+
+async def _update_redis_status(redis: aioredis.Redis, job_id: str, result: dict) -> None:
     try:
-        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
         await redis.setex(
             f"kuberag:job:{job_id}",
             86400,
@@ -31,13 +46,12 @@ async def _update_redis_status(job_id: str, result: dict) -> None:
         if result.get("status") == "completed" and result.get("answer"):
             query = result.get("query", "")
             if query:
-                digest = __import__("hashlib").sha256(query.strip().lower().encode()).hexdigest()
+                digest = hashlib.sha256(query.strip().lower().encode()).hexdigest()
                 await redis.setex(
                     f"kuberag:cache:{digest}",
                     settings.cache_ttl_seconds,
                     json.dumps(result),
                 )
-        await redis.aclose()
     except Exception as exc:
         log.warning("redis_update_failed", error=str(exc))
 
@@ -62,24 +76,40 @@ async def consume_loop(topic: str, handler) -> None:
             log.warning("kafka_not_ready", topic=topic, retry_in=5)
             await asyncio.sleep(5)
 
+    redis = await _get_redis()
     try:
         async for msg in consumer:
             if _shutdown.is_set():
                 break
+
             payload = msg.value
             job_id = payload.get("job_id", "unknown")
-            log.info("message_received", topic=topic, job_id=job_id, offset=msg.offset)
+            # Extract trace_id injected by the gateway; fall back to job_id for
+            # backwards compatibility. Bind to every log line in this handler.
+            trace_id = payload.get("trace_id", job_id)
+            bound_log = log.bind(topic=topic, job_id=job_id, trace_id=trace_id, offset=msg.offset)
+
+            bound_log.info("message_received")
+
+            # Fix 3: idempotency lock — SETNX returns False if another worker
+            # already claimed this job_id. Commit and skip to avoid duplicate
+            # LLM calls and redundant DB writes on at-least-once redelivery.
+            if not await _acquire_lock(redis, job_id):
+                bound_log.info("job_already_claimed_skipping")
+                await consumer.commit()
+                continue
 
             try:
                 result = await handler(payload)
                 if result:
-                    await _update_redis_status(job_id, result)
+                    await _update_redis_status(redis, job_id, result)
             except Exception as exc:
-                log.error("handler_error", topic=topic, job_id=job_id, error=str(exc))
+                bound_log.error("handler_error", error=str(exc))
 
             await consumer.commit()
     finally:
         await consumer.stop()
+        await redis.aclose()
 
 
 async def main() -> None:

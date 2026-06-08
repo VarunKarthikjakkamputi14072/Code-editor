@@ -49,8 +49,8 @@ async def ensure_schema() -> None:
                 ON documents (collection);
 
             CREATE INDEX IF NOT EXISTS idx_documents_embedding
-                ON documents USING ivfflat (embedding vector_cosine_ops)
-                WITH (lists = 100);
+                ON documents USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64);
 
             CREATE TABLE IF NOT EXISTS jobs (
                 job_id      TEXT PRIMARY KEY,

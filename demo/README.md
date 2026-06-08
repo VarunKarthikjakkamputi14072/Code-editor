@@ -34,12 +34,17 @@ We use it two ways at once:
 
 ## Run it
 
+A real slice of the dataset is **already bundled** in `demo/data/`
+(`passages.jsonl` — 60 passages, `questions.jsonl` — 50 questions), so the demo
+works out of the box. Step 0 below is only needed if you want a larger or different
+slice.
+
 Start the stack and pull the models first (see the root README), then:
 
 ```bash
-# 0. one-time: download a slice of the real dataset (no API key needed)
-python demo/prepare_dataset.py --passages 50 --questions 40
-#    -> writes demo/data/passages.jsonl and demo/data/questions.jsonl
+# 0. (optional) re-fetch a larger slice of the real dataset (no API key needed)
+python demo/prepare_dataset.py --passages 200 --questions 100
+#    -> overwrites demo/data/passages.jsonl and demo/data/questions.jsonl
 
 # 1. ingest the corpus into KubeRAG (embeds + stores in pgvector)
 python demo/seed.py

@@ -16,10 +16,21 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import urllib.error
 import urllib.request
 
 SQUAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json"
+# Same file served from the project's GitHub repo — used as a fallback when the
+# primary host is unreachable (e.g. behind a restrictive network policy).
+SQUAD_FALLBACK_URL = (
+    "https://raw.githubusercontent.com/rajpurkar/SQuAD-explorer/master/dataset/dev-v1.1.json"
+)
 DATA_DIR = pathlib.Path(__file__).parent / "data"
+
+
+def _fetch(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        return json.load(resp)
 
 
 def main() -> None:
@@ -34,8 +45,11 @@ def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"Downloading SQuAD dev set from {args.url} ...")
-    with urllib.request.urlopen(args.url, timeout=60) as resp:
-        squad = json.load(resp)
+    try:
+        squad = _fetch(args.url)
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        print(f"  primary host failed ({exc}); trying fallback ...")
+        squad = _fetch(SQUAD_FALLBACK_URL)
 
     passages: list[dict] = []
     questions: list[dict] = []

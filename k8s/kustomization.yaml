@@ -16,6 +16,7 @@ resources:
   - redis/service.yaml
   - ollama/deployment.yaml
   - ollama/service.yaml
+  - ollama/hpa.yaml
   - gateway/configmap.yaml
   - gateway/deployment.yaml
   - gateway/service.yaml

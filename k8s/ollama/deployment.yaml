@@ -40,9 +40,12 @@ spec:
             requests:
               memory: "4Gi"
               cpu: "1"
+              # Uncomment when scheduling on GPU nodes:
+              # nvidia.com/gpu: "1"
             limits:
               memory: "8Gi"
               cpu: "4"
+              # nvidia.com/gpu: "1"
           readinessProbe:
             httpGet:
               path: /api/tags

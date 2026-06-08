@@ -74,8 +74,15 @@ async def submit_query(
         )
 
     job_id = str(uuid.uuid4())
+    # Fix 4: generate a trace_id (or honour one forwarded by an upstream proxy).
+    # It travels in the Kafka payload so the worker can bind it to its own logs,
+    # making the full request lifecycle searchable by a single ID.
+    trace_id = request.headers.get("X-Trace-ID") or str(uuid.uuid4())
+    log.bind(job_id=job_id, trace_id=trace_id).info("query_submitted")
+
     payload = {
         "job_id": job_id,
+        "trace_id": trace_id,
         "query": body.query,
         "top_k": body.top_k,
         "collection": body.collection,
@@ -84,7 +91,6 @@ async def submit_query(
     await set_job_status(job_id, {"status": JobStatus.pending, "job_id": job_id})
     await publish(settings.kafka_query_topic, payload, key=job_id)
 
-    log.info("query_submitted", job_id=job_id)
     return QueryResponse(job_id=job_id, status=JobStatus.pending)
 
 
@@ -112,8 +118,12 @@ async def ingest_document(
     await _check_rate_limit(request)
 
     job_id = str(uuid.uuid4())
+    trace_id = request.headers.get("X-Trace-ID") or str(uuid.uuid4())
+    log.bind(job_id=job_id, trace_id=trace_id).info("ingest_submitted")
+
     payload = {
         "job_id": job_id,
+        "trace_id": trace_id,
         "text": body.text,
         "metadata": body.metadata,
         "collection": body.collection,
@@ -122,7 +132,6 @@ async def ingest_document(
     await set_job_status(job_id, {"status": JobStatus.pending, "job_id": job_id})
     await publish(settings.kafka_ingest_topic, payload, key=job_id)
 
-    log.info("ingest_submitted", job_id=job_id)
     return IngestResponse(job_id=job_id, status=JobStatus.pending)
 
 

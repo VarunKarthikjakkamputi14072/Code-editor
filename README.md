@@ -1,166 +1,176 @@
-# KubeRAG — Distributed AI Inference Engine
+# KubeRAG — a RAG system that doesn't fall over under load
 
-A production-grade, fault-tolerant Retrieval-Augmented Generation platform built on Kubernetes, Kafka, and pgvector. Ingestion, embedding, and LLM inference run as isolated, auto-scaling microservices decoupled by an async message queue.
+This is a "chat with your documents" engine, but the interesting part isn't the
+chat — it's everything around it. Ingestion, embedding, and the actual LLM call run
+as separate services, with Kafka sitting in the middle so the slow parts can't take
+down the fast parts. It runs on Kubernetes and scales the heavy workers up and down
+on their own.
 
-## Architecture
+## Why I built this
+
+Back in my undergrad I built a small "PDF chatter" — upload a paper, ask it
+questions, get answers. It worked fine for me and a few classmates. But it was a
+single process: one slow request and everyone waited, and if it crashed mid-answer
+the request was just gone.
+
+That bugged me. So KubeRAG is me answering the follow-up question I never got to at
+the time: *what does it actually take to run RAG for a lot of people at once?* The
+answer turned out to be mostly about decoupling and backpressure, not about the AI
+itself — which is the whole point of the project.
+
+## How it works
 
 ```
                         ┌─────────────────────────────────────────┐
                         │            Kubernetes Cluster            │
                         │                                          │
-  Client ──────────────►│  FastAPI Gateway  (Deployment, HPA)     │
+  You ──────────────────►  FastAPI Gateway  (Deployment, HPA)     │
                         │       │        │                         │
                         │    Redis     Kafka (StatefulSet)         │
-                        │  (cache/    (query-ingestion topic)      │
-                        │   jobs)     (doc-ingestion topic)        │
-                        │                  │                       │
+                        │  (cache/    (query + ingest topics)      │
+                        │   jobs)            │                     │
                         │         Worker Pods (Deployment, HPA)   │
                         │                  │                       │
                         │        PostgreSQL + pgvector             │
-                        │         (StatefulSet, IVFFlat)           │
+                        │            (StatefulSet)                 │
                         │                  │                       │
                         │          Ollama (Deployment)             │
                         │    nomic-embed-text + llama3             │
                         └─────────────────────────────────────────┘
 ```
 
-### Request Flow
+When you ask a question:
 
-1. **Client** sends `POST /api/v1/query` with a natural-language question.
-2. **Gateway** checks Redis for a semantic cache hit (SHA-256 keyed).
-3. **Cache miss** → Gateway publishes a message to the `query-ingestion` Kafka topic and returns `202 Accepted` with a `job_id`.
-4. **Worker pod** consumes the message, embeds the query via Ollama (`nomic-embed-text`), runs a cosine similarity search against pgvector, then calls `llama3` for generation.
-5. Worker writes the result to PostgreSQL, updates Redis (job status + cache), and commits the Kafka offset.
-6. **Client** polls `GET /api/v1/query/{job_id}` until `status == "completed"`.
+1. The **gateway** takes your query and first checks Redis — if someone asked the
+   same thing recently, you get the cached answer immediately and we're done.
+2. On a cache miss, the gateway drops the query onto a Kafka topic and hands you
+   back a `job_id` with `202 Accepted`. It does **not** wait around for the LLM.
+3. A **worker** picks the job up, embeds the query, searches pgvector for the most
+   relevant chunks, and feeds those plus your question to `llama3`.
+4. The worker saves the answer to Postgres, updates Redis, and only then commits
+   the Kafka offset.
+5. You poll `GET /query/{job_id}` until it says `completed`.
 
-Kafka provides **backpressure**: 1 000 concurrent queries queue safely — workers pull at the rate their resources allow. A crashed worker leaves its offset uncommitted, so another pod in the consumer group retries automatically.
+That Kafka-in-the-middle bit is the reason the whole thing exists. If a thousand
+people ask questions at the same moment, they queue up safely instead of piling
+onto the LLM and OOM-ing it — the workers just pull jobs as fast as they can handle
+them. And because a worker only commits its offset *after* it finishes, a crash
+mid-answer means another worker just picks the job back up. Nothing's lost.
 
-## Services
+## What's running
 
-| Service | Type | Image | Scales |
-|---------|------|-------|--------|
-| `gateway` | FastAPI API gateway | `kuberag/gateway` | HPA 2–10 pods |
-| `worker` | Kafka consumer + RAG pipeline | `kuberag/worker` | HPA 2–20 pods |
-| `postgres` | Vector + state storage | `pgvector/pgvector:pg16` | StatefulSet |
-| `kafka` | Async message broker (KRaft) | `confluentinc/cp-kafka:7.6.1` | StatefulSet |
-| `redis` | Semantic cache + rate limiting | `redis:7-alpine` | Deployment |
-| `ollama` | Embedding + generation engine | `ollama/ollama` | Deployment |
+| Service | What it is | How it scales |
+|---------|------------|---------------|
+| `gateway` | FastAPI front door — auth, rate limiting, cache check, publishes to Kafka | HPA, 2–10 pods |
+| `worker` | Pulls from Kafka, runs the RAG pipeline | HPA, 2–20 pods |
+| `postgres` | pgvector — stores chunks, embeddings, and job state | StatefulSet |
+| `kafka` | The queue that decouples everything (KRaft mode, no ZooKeeper) | StatefulSet |
+| `redis` | Semantic cache + rate-limit counters | Deployment |
+| `ollama` | Runs the embedding and generation models | Deployment + HPA |
 
-## Quick Start — Local (Docker Compose)
+## Try it locally
+
+You don't need Kubernetes to run this — Docker Compose brings up the whole stack:
 
 ```bash
-# 1. Start all services
+# Start everything
 docker compose up --build -d
 
-# 2. Pull Ollama models (run once)
+# Pull the Ollama models (only needed once)
 docker compose --profile init run --rm ollama-init
 
-# 3. Get a token
+# Grab a token (default creds are admin/admin — change these for anything real)
 TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/token \
   -d "username=admin&password=admin" | jq -r .access_token)
 
-# 4. Ingest a document
+# Add a document
 curl -s -X POST http://localhost:8000/api/v1/ingest \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"text": "KubeRAG is a distributed RAG platform built on Kubernetes and Kafka.", "collection": "demo"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"text": "KubeRAG keeps the API fast by pushing slow LLM work onto a Kafka queue.", "collection": "demo"}'
 
-# 5. Submit a query
+# Ask something
 JOB=$(curl -s -X POST http://localhost:8000/api/v1/query \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is KubeRAG?", "collection": "demo"}' | jq -r .job_id)
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"query": "How does KubeRAG stay fast?", "collection": "demo"}' | jq -r .job_id)
 
-# 6. Poll for the result
-curl -s http://localhost:8000/api/v1/query/$JOB \
-  -H "Authorization: Bearer $TOKEN" | jq .
+# Get the answer (re-run until status is "completed")
+curl -s http://localhost:8000/api/v1/query/$JOB -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
-## Demo on a Real Dataset (SQuAD)
+> Heads up: by default Ollama runs on **CPU**, so the first real answer can take a
+> while. That's expected — see the notes at the bottom on running it properly on a
+> GPU.
 
-Beyond the toy example above, [`demo/`](demo/) runs KubeRAG end-to-end against a
-real benchmark — the **Stanford Question Answering Dataset (SQuAD v1.1)** — and
-reports answer accuracy and latency. It treats SQuAD's Wikipedia passages as the
-corpus and its human-written questions + gold answers as the evaluation set.
+## See it work on real data
+
+The toy example above is fine for a smoke test, but [`demo/`](demo/) is the real
+thing. It loads the **Stanford Question Answering Dataset (SQuAD v1.1)** — actual
+Wikipedia passages with human-written questions and known-correct answers — ingests
+the passages, asks the questions, and then **scores the answers against ground
+truth**. So it's an actual evaluation, not a scripted happy path.
 
 ```bash
-python demo/prepare_dataset.py --passages 50 --questions 40   # fetch real data
-python demo/seed.py        # ingest the corpus (chunk → embed → pgvector)
-python demo/evaluate.py    # score answers vs. ground truth, report p50/p95 latency
-python demo/load_test.py --concurrency 200   # show Kafka backpressure under a burst
+python demo/seed.py        # ingest the bundled SQuAD passages
+python demo/evaluate.py    # ask the questions, score answers, report latency
+python demo/load_test.py --concurrency 200   # fire a burst to show backpressure
 ```
 
-All demo scripts are pure Python stdlib (no `pip install`). See
-[`demo/README.md`](demo/README.md) for the full walkthrough, use-case framing, and
-expected output.
+A real slice of the data is already committed under `demo/data/`, so this works out
+of the box — no download needed. Everything in `demo/` is plain Python standard
+library, nothing to `pip install`. Full walkthrough in [`demo/README.md`](demo/README.md).
 
-## Kubernetes Deployment
-
-### Prerequisites
-
-- `kubectl` configured against a cluster (Minikube, Kind, or cloud)
-- `kustomize` (bundled with `kubectl >= 1.14`)
+## Running it on Kubernetes
 
 ```bash
-# 1. Build and push images (replace with your registry)
+# Build the two app images (point these at your own registry)
 docker build -t your-registry/kuberag-gateway:latest ./gateway
 docker build -t your-registry/kuberag-worker:latest ./worker
 docker push your-registry/kuberag-gateway:latest
 docker push your-registry/kuberag-worker:latest
 
-# 2. Update image references in k8s/gateway/deployment.yaml and k8s/worker/deployment.yaml
+# Update the image names in k8s/gateway/deployment.yaml and k8s/worker/deployment.yaml,
+# then set a real JWT secret:
+echo -n "something-actually-secret" | base64    # paste into k8s/secrets.yaml
 
-# 3. Rotate the secret key
-echo -n "your-strong-secret" | base64
-# Paste the output into k8s/secrets.yaml → data.secret-key
-
-# 4. Apply the full stack
+# Apply the whole stack at once
 kubectl apply -k k8s/
-
-# 5. Watch pods come up
 kubectl get pods -n kuberag -w
-
-# 6. Get the gateway external IP (LoadBalancer)
-kubectl get svc gateway -n kuberag
 ```
 
-### Local Cluster (Minikube)
+To try it on your laptop with Minikube instead:
 
 ```bash
 minikube start --cpus 6 --memory 12g --driver docker
 minikube addons enable metrics-server
-
-# Use minikube's Docker daemon so images are available without a registry
-eval $(minikube docker-env)
+eval $(minikube docker-env)          # build straight into minikube, skip the registry
 docker build -t kuberag/gateway:latest ./gateway
 docker build -t kuberag/worker:latest ./worker
-
 kubectl apply -k k8s/
-minikube tunnel   # exposes the LoadBalancer service
+minikube tunnel                      # exposes the gateway LoadBalancer
 ```
 
-## API Reference
+## API
 
-All endpoints require a `Bearer` token except `/api/v1/health`.
+Everything needs a `Bearer` token except `/health`.
 
-| Method | Path | Description |
+| Method | Path | What it does |
 |--------|------|-------------|
-| `POST` | `/api/v1/auth/token` | Get JWT (form: username/password) |
-| `POST` | `/api/v1/query` | Submit a RAG query → `202` + `job_id` |
-| `GET` | `/api/v1/query/{job_id}` | Poll job status / retrieve answer |
-| `POST` | `/api/v1/ingest` | Ingest a document → `202` + `job_id` |
-| `GET` | `/api/v1/health` | Health probe (Kafka + Redis status) |
+| `POST` | `/api/v1/auth/token` | Log in, get a JWT |
+| `POST` | `/api/v1/query` | Ask a question → `202` + `job_id` |
+| `GET` | `/api/v1/query/{job_id}` | Check on a job / get the answer |
+| `POST` | `/api/v1/ingest` | Add a document → `202` + `job_id` |
+| `GET` | `/api/v1/health` | Health check (Kafka + Redis) |
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/docs` | Swagger UI |
 
-### Query response schema
+A finished query comes back looking like this:
 
 ```json
 {
   "job_id": "uuid",
-  "status": "pending | processing | completed | failed",
+  "status": "completed",
   "cached": false,
-  "answer": "...",
+  "answer": "The Denver Broncos.",
   "sources": [
     {"id": 1, "content": "...", "metadata": {}, "score": 0.94}
   ]
@@ -169,69 +179,55 @@ All endpoints require a `Bearer` token except `/api/v1/health`.
 
 ## Configuration
 
-All services are configured via environment variables (or `.env` for local dev):
+Everything is set through environment variables (or a `.env` file locally). The
+ones you'll actually touch:
 
-### Gateway
+**Gateway**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` | Kafka broker address |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis connection URL |
-| `SECRET_KEY` | `change-me` | JWT signing key |
-| `RATE_LIMIT_REQUESTS` | `100` | Requests per window per IP |
-| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate limit window |
-| `CACHE_TTL_SECONDS` | `3600` | Semantic cache TTL |
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` | Broker address |
+| `REDIS_URL` | `redis://redis:6379/0` | Cache + job store |
+| `SECRET_KEY` | `change-me` | **Change this.** JWT signing key |
+| `RATE_LIMIT_REQUESTS` | `100` | Per IP, per window |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window |
+| `CACHE_TTL_SECONDS` | `3600` | How long cached answers live |
 
-### Worker
+**Worker**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` | Kafka broker address |
-| `POSTGRES_DSN` | `postgresql://...` | PostgreSQL connection string |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis connection URL |
-| `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama service URL |
-| `EMBED_MODEL` | `nomic-embed-text` | Embedding model name |
-| `GEN_MODEL` | `llama3` | Generation model name |
-| `CHUNK_SIZE` | `512` | Words per document chunk |
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `POSTGRES_DSN` | `postgresql://...` | Where chunks + embeddings live |
+| `OLLAMA_BASE_URL` | `http://ollama:11434` | The model server |
+| `EMBED_MODEL` | `nomic-embed-text` | Embedding model |
+| `GEN_MODEL` | `llama3` | Generation model |
+| `CHUNK_SIZE` | `512` | Words per chunk |
 | `CHUNK_OVERLAP` | `64` | Overlap between chunks |
 
-## Observability
-
-- **Metrics** — Prometheus metrics at `GET /metrics` (request count, latency histograms, in-flight requests via `prometheus-fastapi-instrumentator`)
-- **Logs** — Structured JSON via `structlog` on all services; ship to Loki or any log aggregator
-- **Health** — `GET /api/v1/health` reports Kafka and Redis reachability; wired to Kubernetes readiness/liveness probes
-
-## Project Structure
+## Where things live
 
 ```
-.
-├── gateway/                # FastAPI API gateway
-│   ├── app/
-│   │   ├── api/routes.py   # /query, /ingest, /auth, /health
-│   │   ├── core/           # config, Kafka producer, Redis cache, auth
-│   │   └── models/schemas.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── worker/                 # Kafka consumer + RAG pipeline
-│   ├── app/
-│   │   ├── consumer.py     # Kafka consumer loop (2 topics)
-│   │   ├── rag_pipeline.py # embed → search → generate → store
-│   │   ├── db.py           # asyncpg + pgvector
-│   │   ├── embeddings.py   # Ollama embed/generate with retry
-│   │   └── chunker.py      # sliding-window text chunker
-│   ├── Dockerfile
-│   └── requirements.txt
-├── k8s/                    # Kubernetes manifests (Kustomize)
-│   ├── kustomization.yaml
-│   ├── namespace.yaml
-│   ├── secrets.yaml
-│   ├── postgres/           # StatefulSet + headless Service
-│   ├── kafka/              # StatefulSet (KRaft) + headless Service
-│   ├── redis/              # Deployment + Service
-│   ├── ollama/             # Deployment + Service
-│   ├── gateway/            # Deployment + LoadBalancer + HPA
-│   └── worker/             # Deployment + HPA
-├── docker-compose.yml      # Local development
-├── init.sql                # PostgreSQL schema bootstrap
-└── README.md
+gateway/   FastAPI app — auth, rate limiting, cache, Kafka producer
+worker/    Kafka consumer + the RAG pipeline (embed → search → generate → store)
+k8s/       Kubernetes manifests, wired together with Kustomize
+demo/      Real-dataset demo + evaluation (SQuAD)
+docker-compose.yml   the whole stack for local dev
+init.sql             Postgres schema (pgvector, HNSW index, jobs table)
+```
+
+## A few honest notes
+
+- **It's slow on CPU.** Ollama defaults to CPU here, which is fine for a demo but
+  not for anything real. The Ollama deployment has commented-out
+  `nvidia.com/gpu` requests ready to uncomment for a GPU node pool — that's where
+  this actually belongs.
+- **Auth is intentionally minimal.** There's a single in-memory user to keep the
+  focus on the distributed parts. Swapping in a real user table is a small change in
+  `gateway/app/core/auth.py`.
+- **The numbers in `demo/README.md` are illustrative.** Real accuracy depends on the
+  generation model and how many passages you ingest — run `evaluate.py` yourself and
+  you'll get your own.
+- **What I'd add next:** distributed tracing wired into something like Tempo or
+  Datadog (the `trace_id` already flows through Kafka end to end — it just isn't
+  exported yet), and a small React UI so you don't have to poll with `curl`.
 ```

@@ -1,6 +1,6 @@
 """Minimal stdlib HTTP client for the KubeRAG gateway.
 
-No third-party dependencies — uses urllib so the demo runs with a bare Python 3
+No third-party dependencies - uses urllib so the demo runs with a bare Python 3
 interpreter. Override the gateway URL with the KUBERAG_URL environment variable.
 """
 from __future__ import annotations

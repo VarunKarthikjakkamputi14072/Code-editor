@@ -6,7 +6,7 @@ with SQuAD-style answer matching (normalized substring containment against any
 gold span). Reports per-question results plus aggregate accuracy and p50/p95
 end-to-end latency.
 
-This is a real retrieval-augmented-generation eval on a real dataset — not a
+This is a real retrieval-augmented-generation eval on a real dataset - not a
 canned demo. Run `seed.py` first so the corpus is populated.
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ def is_correct(answer: str, golds: list[str]) -> bool:
 
 def main() -> None:
     if not DATA.exists():
-        sys.exit("questions.jsonl not found — run: python demo/prepare_dataset.py")
+        sys.exit("questions.jsonl not found - run: python demo/prepare_dataset.py")
 
     questions = [json.loads(line) for line in DATA.read_text().splitlines() if line.strip()]
     print(f"Evaluating {len(questions)} questions against collection '{COLLECTION}'\n")

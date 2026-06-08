@@ -4,7 +4,7 @@
 The point of this script is to show the architecture's defining property: the
 gateway accepts a large simultaneous burst *instantly* (each returns 202 + job_id)
 because Kafka absorbs the load. The slow LLM workers then drain the queue at their
-own pace — nothing is dropped and nothing OOM-crashes, no matter how big the spike.
+own pace - nothing is dropped and nothing OOM-crashes, no matter how big the spike.
 
 Usage:  python demo/load_test.py --concurrency 200
 """

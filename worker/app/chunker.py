@@ -15,7 +15,7 @@ def chunk_text(
     """Recursive character text splitter.
 
     Splits on paragraph breaks first, then sentence boundaries, then words,
-    then characters — ensuring chunks contain complete, coherent thoughts
+    then characters - ensuring chunks contain complete, coherent thoughts
     rather than arbitrary word-count windows that sever sentences mid-thought.
     """
     return _split(text.strip(), size, overlap, _SEPARATORS)
@@ -47,7 +47,7 @@ def _split(text: str, size: int, overlap: int, separators: list[str]) -> list[st
                 overlap_text = " ".join(words[-overlap:]) if overlap else ""
                 current = (overlap_text + separator + segment).lstrip(separator) if overlap_text else segment
             else:
-                # Single segment is still too large — recurse with finer separator
+                # Single segment is still too large - recurse with finer separator
                 if remaining:
                     chunks.extend(_split(segment, size, overlap, remaining))
                 else:

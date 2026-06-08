@@ -91,7 +91,7 @@ async def consume_loop(topic: str, handler) -> None:
 
             bound_log.info("message_received")
 
-            # Fix 3: idempotency lock — SETNX returns False if another worker
+            # Fix 3: idempotency lock - SETNX returns False if another worker
             # already claimed this job_id. Commit and skip to avoid duplicate
             # LLM calls and redundant DB writes on at-least-once redelivery.
             if not await _acquire_lock(redis, job_id):

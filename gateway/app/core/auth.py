@@ -11,7 +11,7 @@ from app.core.config import settings
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
 
-# Minimal in-memory user store — replace with DB lookup in production
+# Minimal in-memory user store - replace with DB lookup in production
 FAKE_USERS: dict[str, dict] = {
     "admin": {
         "username": "admin",

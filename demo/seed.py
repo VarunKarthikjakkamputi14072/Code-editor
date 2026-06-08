@@ -20,7 +20,7 @@ DATA = pathlib.Path(__file__).parent / "data" / "passages.jsonl"
 
 def main() -> None:
     if not DATA.exists():
-        sys.exit("passages.jsonl not found — run: python demo/prepare_dataset.py")
+        sys.exit("passages.jsonl not found - run: python demo/prepare_dataset.py")
 
     passages = [json.loads(line) for line in DATA.read_text().splitlines() if line.strip()]
     print(f"Loaded {len(passages)} passages from {DATA.name}")

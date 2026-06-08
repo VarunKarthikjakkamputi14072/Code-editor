@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Download a slice of the SQuAD v1.1 dev set for the KubeRAG demo.
 
-SQuAD (Rajpurkar et al., 2016 — https://rajpurkar.github.io/SQuAD-explorer/) is
+SQuAD (Rajpurkar et al., 2016 - https://rajpurkar.github.io/SQuAD-explorer/) is
 a real reading-comprehension dataset: Wikipedia passages paired with human-written
 questions and ground-truth answer spans, licensed CC BY-SA 4.0. We use it as a
-realistic, citable corpus *and* as a built-in evaluation set — every ingested
+realistic, citable corpus *and* as a built-in evaluation set - every ingested
 passage comes with questions whose answers we can score against.
 
 Writes two files into demo/data/:
@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 
 SQUAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json"
-# Same file served from the project's GitHub repo — used as a fallback when the
+# Same file served from the project's GitHub repo - used as a fallback when the
 # primary host is unreachable (e.g. behind a restrictive network policy).
 SQUAD_FALLBACK_URL = (
     "https://raw.githubusercontent.com/rajpurkar/SQuAD-explorer/master/dataset/dev-v1.1.json"
